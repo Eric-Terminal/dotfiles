@@ -1,5 +1,41 @@
 setopt HIST_IGNORE_SPACE
 
+# ================= Eric 的登录信息 =================
+if [[ -o interactive ]]; then
+  _eric_login_info() {
+    local c_blue=$'\e[96m'
+    local c_red=$'\e[31m'
+    local c_yellow=$'\e[33m'
+    local c_cyan=$'\e[36m'
+    local c_green=$'\e[32m'
+    local c_reset=$'\e[0m'
+    local uptime_text disk_text ipv4_text
+
+    if command -v figlet >/dev/null 2>&1; then
+      printf "%s%s%s\n" "${c_blue}" "$(figlet -f standard "Eric Terminal")" "${c_reset}"
+    else
+      printf "%sEric Terminal%s\n" "${c_blue}" "${c_reset}"
+    fi
+    echo ""
+
+    echo -e "Welcome, ${c_red}$(whoami)${c_reset} on ${c_yellow}$(hostname)${c_reset}"
+    echo -e "Current location: ${c_cyan}$(pwd)${c_reset}"
+    echo ""
+
+    uptime_text=$(uptime | sed -E 's/, [0-9]+ users?.*//' | sed 's/.*up //')
+    disk_text=$(df -h / | awk 'NR==2 {print "free " $4 " of " $2 " (" $5 ")"}')
+    ipv4_text=$(ipconfig getifaddr en0 2>/dev/null || echo "No IP")
+
+    printf "${c_green}%-12s:${c_reset} %s\n" "Uptime" "${uptime_text}"
+    printf "${c_green}%-12s:${c_reset} %s\n" "Usage of /" "${disk_text}"
+    printf "${c_green}%-12s:${c_reset} (LAN) ${c_green}%s${c_reset}\n" "IPv4" "${ipv4_text}"
+    echo ""
+  }
+
+  _eric_login_info
+  unfunction _eric_login_info
+fi
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.
@@ -20,45 +56,6 @@ ZSH_COMPDUMP="$zsh_cache_dir/.zcompdump-${HOST:-zsh}-${ZSH_VERSION}"
 unset zsh_cache_dir
 
 [[ -s "$ZSH/oh-my-zsh.sh" ]] && source "$ZSH/oh-my-zsh.sh"
-
-# ================= Eric 的登录信息 =================
-if [[ -o interactive ]]; then
-  autoload -Uz add-zsh-hook
-
-  _eric_login_info() {
-    add-zsh-hook -d precmd _eric_login_info
-
-    local c_blue=$'\e[96m'
-    local c_red=$'\e[31m'
-    local c_yellow=$'\e[33m'
-    local c_cyan=$'\e[36m'
-    local c_green=$'\e[32m'
-    local c_reset=$'\e[0m'
-    local uptime_text disk_text ipv4_text
-
-    if command -v figlet >/dev/null 2>&1; then
-      printf "%s%s%s\n" "${c_blue}" "$(figlet -f standard "Eric Terminal")" "${c_reset}"
-    else
-      printf "%sEric Terminal%s\n" "${c_blue}" "${c_reset}"
-    fi
-    echo ""
-
-    echo -e "Welcome, ${c_red}$(whoami)${c_reset} on ${c_yellow}$(hostname)${c_reset}"
-    echo -e "Current location: ${c_cyan}$(pwd)${c_reset}"
-    echo ""
-
-    uptime_text=$(uptime | sed 's/, [0-9]* user.*//' | sed 's/.*up //')
-    disk_text=$(df -h / | awk 'NR==2 {print "free " $4 " of " $2 " (" $5 ")"}')
-    ipv4_text=$(ipconfig getifaddr en0 2>/dev/null || echo "No IP")
-
-    printf "${c_green}%-12s:${c_reset} %s\n" "Uptime" "${uptime_text}"
-    printf "${c_green}%-12s:${c_reset} %s\n" "Usage of /" "${disk_text}"
-    printf "${c_green}%-12s:${c_reset} (LAN) ${c_green}%s${c_reset}\n" "IPv4" "${ipv4_text}"
-    echo ""
-  }
-
-  add-zsh-hook precmd _eric_login_info
-fi
 
 # ================= Eric 的常用配置 =================
 
