@@ -1,0 +1,12 @@
+.zshrc.local
+.gitconfig.local
+.env
+*.local
+*.bak
+*.pysave
+*.zwc
+.zcompdump*
+.*history
+.DS_Store
+.ssh/
+.gnupg/

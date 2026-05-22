@@ -1,0 +1,35 @@
+[core]
+	editor = vim
+
+[user]
+	name = Eric Terminal
+	email = ericterminal@gmail.com
+	signingkey = DDFFBE9D6D4ADA9CD70BC36D8C9DD07C93EDF17F
+
+[credential]
+	helper = osxkeychain
+
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
+
+[http]
+	version = HTTP/1.1
+
+[commit]
+	gpgsign = true
+
+[sendemail]
+	smtpserver = smtp.migadu.com
+	smtpserverport = 587
+	smtpencryption = tls
+	confirm = always
+
+[patatt]
+	format = openpgp
+
+# 本机网络、私有账号、临时覆盖项放在这里。
+[include]
+	path = ~/.gitconfig.local
