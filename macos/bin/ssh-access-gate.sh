@@ -4,6 +4,10 @@
 # Match All
 #     ForceCommand /Users/Eric/dotfiles/macos/bin/ssh-access-gate.sh
 
+# sudo visudo这样写
+# eric ALL=(root) NOPASSWD: /sbin/pfctl -t sshguard -T add *
+# eric ALL=(root) NOPASSWD: /sbin/pfctl -t sshguard -T delete *
+
 # 获取客户端 IP 地址
 REMOTE_IP=$(echo "${SSH_CLIENT}" | awk '{print $1}')
 
