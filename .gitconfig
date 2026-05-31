@@ -3,7 +3,7 @@
 	pager = cat
 
 [user]
-	name = Eric Terminal
+	name = Eric-Terminal
 	email = ericterminal@gmail.com
 	signingkey = DDFFBE9D6D4ADA9CD70BC36D8C9DD07C93EDF17F
 
