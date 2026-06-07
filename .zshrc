@@ -96,3 +96,4 @@ export GPG_TTY=$(tty)
 # CLOUDFLARE_ACCOUNT_ID 放在 ~/.zshrc.local
 
 command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init zsh)"
+alias unblock='xattr -d com.apple.quarantine'
