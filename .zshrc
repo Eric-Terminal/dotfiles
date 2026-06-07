@@ -97,3 +97,17 @@ export GPG_TTY=$(tty)
 
 command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init zsh)"
 alias unblock='xattr -d com.apple.quarantine'
+
+# 实现按一次 Ctrl+Z 挂起，在命令行空白时再按一次 Ctrl+Z 自动恢复前台
+fancy-ctrl-z () {
+  if [[ $#BUFFER -eq 0 ]]; then
+    BUFFER="fg"
+    zle accept-line
+  else
+    zle push-line
+    zle clear-screen
+  fi
+}
+zle -N fancy-ctrl-z
+bindkey '^Z' fancy-ctrl-z
+
