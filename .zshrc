@@ -111,3 +111,17 @@ fancy-ctrl-z () {
 zle -N fancy-ctrl-z
 bindkey '^Z' fancy-ctrl-z
 
+# GPG 相关
+alias gpg-search='gpg --keyserver hkps://keys.openpgp.org --search-keys'
+alias gpg-recv='gpg --keyserver hkps://keys.openpgp.org --recv-keys'
+alias gpg-wkd='gpg --auto-key-locate clear,wkd,nodefault --locate-keys'
+alias gpg-fetch='gpg --locate-external-keys'
+alias gpg-list='gpg --list-keys --keyid-format LONG'
+alias gpg-list-sec='gpg --list-secret-keys --keyid-format LONG'
+alias gpg-export='gpg -a --export'
+alias gpg-update='gpg --refresh-keys --keyserver hkps://keys.openpgp.org'
+alias gpg-del='gpg --delete-keys'
+alias gpg-enc='gpg -e -a -r'
+alias gpg-dec='gpg -d'
+alias gpg-sign='gpg --clear-sign'
+alias gpg-verify='gpg --verify'
