@@ -2,7 +2,7 @@
 # 修改了 /etc/ssh/sshd_config 的配置信息
 # 文件最末尾这样写
 # Match All
-#     ForceCommand /Users/Eric/dotfiles/macos/bin/ssh-access-gate.sh
+#     ForceCommand /Users/Eric/dotfiles/shell/ssh-access-gate.sh
 
 # sudo visudo这样写
 # eric ALL=(root) NOPASSWD: /sbin/pfctl -t sshguard -T add *
