@@ -555,7 +555,7 @@ _sbox_run() {
   local profile_name="$1" network_override="$2" allow_pwd_override="$3"
   shift 3
   local -a rule_args cmd
-  local profile exit_code
+  local profile shell_state cmdline exit_code
 
   while (( $# )); do
     [[ "$1" == -- ]] && {
@@ -573,16 +573,23 @@ _sbox_run() {
   }
 
   profile=$(mktemp "${TMPDIR:-/tmp}/sbox.XXXXXX") || return
+  shell_state=$(mktemp "${TMPDIR:-/tmp}/sbox-shell.XXXXXX") || {
+    rm -f "$profile"
+    return
+  }
   chmod 600 "$profile"
+  chmod 600 "$shell_state"
+  alias -L > "$shell_state"
 
   if ! _sbox_emit_profile "$profile_name" "$network_override" "$allow_pwd_override" "${rule_args[@]}" > "$profile"; then
-    rm -f "$profile"
+    rm -f "$profile" "$shell_state"
     return 2
   fi
 
-  sandbox-exec -f "$profile" "${cmd[@]}"
+  cmdline="${(j: :)${(q)cmd[@]}}"
+  SBOX_SHELL_STATE="$shell_state" SBOX_CMDLINE="$cmdline" sandbox-exec -f "$profile" /bin/zsh -fc 'source "$SBOX_SHELL_STATE"; eval "$SBOX_CMDLINE"'
   exit_code=$?
-  rm -f "$profile"
+  rm -f "$profile" "$shell_state"
   return "$exit_code"
 }
 
