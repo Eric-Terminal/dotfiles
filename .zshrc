@@ -125,3 +125,5 @@ alias gpg-enc='gpg -e -a -r'
 alias gpg-dec='gpg -d'
 alias gpg-sign='gpg --clear-sign'
 alias gpg-verify='gpg --verify'
+
+alias gola='export TZ="America/Los_Angeles" LANG="en_US.UTF-8" LC_ALL="en_US.UTF-8"'
