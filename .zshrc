@@ -71,6 +71,8 @@ export PATH="$PATH:$HOME/.local/bin"
 
 export PATH="$PATH:$HOME/.npm-global/bin"
 
+[[ -f "$HOME/dotfiles/shell/sbox.zsh" ]] && source "$HOME/dotfiles/shell/sbox.zsh"
+
 # ================= Pyenv 配置 (静默加载) =================
 export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
@@ -79,6 +81,7 @@ command -v pyenv >/dev/null 2>&1 && eval "$(pyenv init -)" >/dev/null 2>&1
 
 # ================= Node.js 配置 =================
 export NODE_OPTIONS=--max-old-space-size=4096
+export npm_config_script_shell=/bin/sh
 
 # ================= 本机私有配置 =================
 # API Key、Token、私有代理等写在 ~/.zshrc.local，不提交仓库。
