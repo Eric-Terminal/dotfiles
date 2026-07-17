@@ -25,6 +25,18 @@ _external-move-copy() {
   local partial_item="${partial_root}/${source_path:t}"
   local marker_path="${partial_root}/.xmv-source"
   local recorded_source
+  local rsync_bin="/usr/bin/rsync"
+  local -a rsync_options
+
+  if [[ -x /opt/homebrew/bin/rsync ]]; then
+    rsync_bin="/opt/homebrew/bin/rsync"
+    rsync_options=(-aHAXNh --partial --no-inc-recursive --info=progress2,name0)
+  elif [[ -x /usr/local/bin/rsync ]]; then
+    rsync_bin="/usr/local/bin/rsync"
+    rsync_options=(-aHAXNh --partial --no-inc-recursive --info=progress2,name0)
+  else
+    rsync_options=(-aEHh --partial --progress)
+  fi
 
   _external-move-run "$use_sudo" /bin/mkdir -p "$target_parent" || {
     printf 'xmv：无法创建目标目录：%s\n' "$target_parent" >&2
@@ -59,8 +71,12 @@ _external-move-copy() {
     fi
   fi
 
-  printf 'xmv：开始复制，下面会实时显示每个文件的进度。\n'
-  if ! _external-move-run "$use_sudo" /usr/bin/rsync -aEHh --partial --progress \
+  if [[ "$rsync_bin" == "/usr/bin/rsync" ]]; then
+    printf 'xmv：系统 rsync 不支持目录总进度，将显示逐文件进度。\n'
+  else
+    printf 'xmv：正在统计目录内容，随后会在同一行刷新总体进度。\n'
+  fi
+  if ! _external-move-run "$use_sudo" "$rsync_bin" "${rsync_options[@]}" \
     "$source_path" "$partial_root/"; then
     printf 'xmv：复制未完成，Mac 原件保持不变；下次执行可继续复制。\n' >&2
     printf 'xmv：未完成的数据位于：%s\n' "$partial_root" >&2
@@ -113,7 +129,7 @@ external-move() {
   xmv --restore [--dry-run] <路径> [更多路径...]
 
 默认把路径移动到 /Volumes/nvme0n1 下的同名绝对路径，并在原位置
-创建符号链接。复制时会实时显示进度，成功前不会删除 Mac 原件。例如：
+创建符号链接。复制时会在同一行显示总体进度，成功前不会删除 Mac 原件。例如：
   xmv ~/Documents/archive
   # /Users/Eric/Documents/archive
   # → /Volumes/nvme0n1/Users/Eric/Documents/archive

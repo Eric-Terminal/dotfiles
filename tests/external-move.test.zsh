@@ -50,6 +50,7 @@ external-move --dry-run "$test_source" >/dev/null
 
 test_output="$(external-move "$test_source")"
 [[ "$test_output" == *'100%'* ]]
+[[ "$test_output" != *'验证文件'* ]]
 [[ -L "$test_source" ]]
 [[ "$(readlink "$test_source")" == "$test_target" ]]
 [[ -f "$test_target/验证文件" ]]
@@ -63,6 +64,7 @@ external-move --restore --dry-run "$test_source" >/dev/null
 
 test_output="$(external-move --restore "$test_source")"
 [[ "$test_output" == *'100%'* ]]
+[[ "$test_output" != *'验证文件'* ]]
 [[ -d "$test_source" && ! -L "$test_source" ]]
 [[ -f "$test_source/验证文件" ]]
 [[ "$(xattr -p com.eric-terminal.xmv-test "$test_source/验证文件")" == '保留扩展属性' ]]
