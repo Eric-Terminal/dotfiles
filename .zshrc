@@ -72,6 +72,7 @@ export PATH="$PATH:$HOME/.local/bin"
 export PATH="$PATH:$HOME/.npm-global/bin"
 
 [[ -f "$HOME/dotfiles/shell/sbox.zsh" ]] && source "$HOME/dotfiles/shell/sbox.zsh"
+[[ -f "$HOME/dotfiles/shell/external-move.zsh" ]] && source "$HOME/dotfiles/shell/external-move.zsh"
 
 # ================= Pyenv 配置 (静默加载) =================
 export PYENV_ROOT="$HOME/.pyenv"
