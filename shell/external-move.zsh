@@ -1,3 +1,16 @@
+# 根据目标位置权限执行普通命令或请求管理员权限。
+_external-move-run() {
+  emulate -L zsh
+
+  local use_sudo="$1"
+  shift
+  if (( use_sudo )); then
+    command sudo "$@"
+  else
+    command "$@"
+  fi
+}
+
 # 使用可续传的临时目录复制数据，成功后再原子放入最终位置。
 _external-move-copy() {
   emulate -L zsh
@@ -5,6 +18,7 @@ _external-move-copy() {
 
   local source_path="$1"
   local target_path="$2"
+  local use_sudo="${3:-0}"
   local target_parent="${target_path:h}"
   local target_name="${target_path:t}"
   local partial_root="${target_parent}/.${target_name}.xmv-partial"
@@ -12,7 +26,7 @@ _external-move-copy() {
   local marker_path="${partial_root}/.xmv-source"
   local recorded_source
 
-  command mkdir -p "$target_parent" || {
+  _external-move-run "$use_sudo" /bin/mkdir -p "$target_parent" || {
     printf 'xmv：无法创建目标目录：%s\n' "$target_parent" >&2
     return 1
   }
@@ -29,19 +43,25 @@ _external-move-copy() {
     fi
     printf 'xmv：发现上次未完成的复制，正在继续：%s\n' "$source_path"
   else
-    command mkdir "$partial_root" || {
+    _external-move-run "$use_sudo" /bin/mkdir "$partial_root" || {
       printf 'xmv：无法创建临时目录：%s\n' "$partial_root" >&2
       return 1
     }
-    if ! printf '%s\n' "$source_path" >| "$marker_path"; then
+    if (( use_sudo )); then
+      printf '%s\n' "$source_path" | command sudo /usr/bin/tee "$marker_path" >/dev/null
+    else
+      printf '%s\n' "$source_path" >| "$marker_path"
+    fi
+    if (( $? != 0 )); then
       printf 'xmv：无法记录临时目录来源：%s\n' "$marker_path" >&2
-      command rmdir "$partial_root" 2>/dev/null
+      _external-move-run "$use_sudo" /bin/rmdir "$partial_root" 2>/dev/null
       return 1
     fi
   fi
 
   printf 'xmv：开始复制，下面会实时显示每个文件的进度。\n'
-  if ! command rsync -aEHh --partial --progress "$source_path" "$partial_root/"; then
+  if ! _external-move-run "$use_sudo" /usr/bin/rsync -aEHh --partial --progress \
+    "$source_path" "$partial_root/"; then
     printf 'xmv：复制未完成，Mac 原件保持不变；下次执行可继续复制。\n' >&2
     printf 'xmv：未完成的数据位于：%s\n' "$partial_root" >&2
     return 1
@@ -55,24 +75,23 @@ _external-move-copy() {
     printf 'xmv：复制期间最终目标被占用，未覆盖它：%s\n' "$target_path" >&2
     return 1
   fi
-  if ! command mv "$partial_item" "$target_path"; then
+  if ! _external-move-run "$use_sudo" /bin/mv "$partial_item" "$target_path"; then
     printf 'xmv：无法把复制结果放入最终位置：%s\n' "$target_path" >&2
     return 1
   fi
 
-  command rm "$marker_path" 2>/dev/null
-  command rmdir "$partial_root" 2>/dev/null || \
+  _external-move-run "$use_sudo" /bin/rm "$marker_path" 2>/dev/null
+  _external-move-run "$use_sudo" /bin/rmdir "$partial_root" 2>/dev/null || \
     printf 'xmv：数据已复制，但临时目录未能清理：%s\n' "$partial_root" >&2
   return 0
 }
 
-# 将主目录中的文件迁移到外置 NVMe，并在原位置保留符号链接。
+# 将任意文件迁移到外置 NVMe，并在原位置保留符号链接。
 external-move() {
   emulate -L zsh
   setopt local_options no_sh_word_split
 
   local drive_root="/Volumes/nvme0n1"
-  local home_root="${HOME:a}"
   local mode="move"
   local dry_run=0
   local result=0
@@ -98,6 +117,11 @@ external-move() {
   xmv ~/Documents/archive
   # /Users/Eric/Documents/archive
   # → /Volumes/nvme0n1/Users/Eric/Documents/archive
+
+系统路径也遵循同一规则；需要写入权限时，xmv 会自动请求 sudo：
+  xmv /Applications/Example.app
+  # /Applications/Example.app
+  # → /Volumes/nvme0n1/Applications/Example.app
 
 选项：
   -n, --dry-run   只显示将执行的操作
@@ -141,19 +165,34 @@ EOF
     return 1
   fi
 
-  local raw_path source_path target_path
+  local raw_path source_path target_path write_parent target_write_parent
   local link_value link_path
+  local use_sudo
   for raw_path in "$@"; do
     source_path="${raw_path:a}"
+    target_path="${drive_root}${source_path}"
 
-    # 只允许迁移主目录内部的具体项目，避免误操作整个主目录或系统路径。
-    if [[ "$source_path" != "$home_root"/* ]]; then
-      printf 'xmv：路径必须位于主目录 %s 内：%s\n' "$home_root" "$source_path" >&2
+    # 目标位于源目录内部时，复制会递归包含自身，因而无法成立。
+    if [[ "$source_path" == "/" || "$target_path" == "$source_path"/* ]]; then
+      printf 'xmv：目标路径位于源目录内部，无法递归迁移：%s\n' "$source_path" >&2
       result=1
       continue
     fi
 
-    target_path="${drive_root}${source_path}"
+    write_parent="${source_path:h}"
+    while [[ ! -e "$write_parent" && "$write_parent" != "/" ]]; do
+      write_parent="${write_parent:h}"
+    done
+    target_write_parent="${target_path:h}"
+    while [[ ! -e "$target_write_parent" && "$target_write_parent" != "/" ]]; do
+      target_write_parent="${target_write_parent:h}"
+    done
+    use_sudo=0
+    if [[ ! -w "$write_parent" || ! -w "$target_write_parent" || \
+      ( -e "$source_path" && ! -r "$source_path" ) || \
+      ( -d "$source_path" && ! -w "$source_path" ) ]]; then
+      use_sudo=1
+    fi
 
     if [[ "$mode" == "move" ]]; then
       if [[ -L "$source_path" ]]; then
@@ -180,12 +219,17 @@ EOF
           if (( dry_run )); then
             printf '[预览] 创建链接：%s -> %s\n' "$source_path" "$target_path"
           else
-            command mkdir -p "${source_path:h}" || {
+            if (( use_sudo )) && ! command sudo -v; then
+              printf 'xmv：未获得管理员权限：%s\n' "$source_path" >&2
+              result=1
+              continue
+            fi
+            _external-move-run "$use_sudo" /bin/mkdir -p "${source_path:h}" || {
               printf 'xmv：无法创建原路径的父目录：%s\n' "${source_path:h}" >&2
               result=1
               continue
             }
-            if command ln -s "$target_path" "$source_path"; then
+            if _external-move-run "$use_sudo" /bin/ln -s "$target_path" "$source_path"; then
               printf 'xmv：检测到硬盘中已有数据，已补建链接：%s -> %s\n' \
                 "$source_path" "$target_path"
             else
@@ -209,15 +253,22 @@ EOF
       if (( dry_run )); then
         printf '[预览] 移动：%s -> %s\n' "$source_path" "$target_path"
         printf '[预览] 创建链接：%s -> %s\n' "$source_path" "$target_path"
+        (( use_sudo )) && printf '[预览] 需要管理员权限：是\n'
         continue
       fi
 
-      if ! _external-move-copy "$source_path" "$target_path"; then
+      if (( use_sudo )) && ! command sudo -v; then
+        printf 'xmv：未获得管理员权限：%s\n' "$source_path" >&2
         result=1
         continue
       fi
 
-      if ! command rm -rf "$source_path"; then
+      if ! _external-move-copy "$source_path" "$target_path" "$use_sudo"; then
+        result=1
+        continue
+      fi
+
+      if ! _external-move-run "$use_sudo" /bin/rm -rf "$source_path"; then
         printf 'xmv：复制已完成，但无法删除 Mac 原件。两处数据均被保留：\n' >&2
         printf '  Mac：%s\n' "$source_path" >&2
         printf '  硬盘：%s\n' "$target_path" >&2
@@ -225,12 +276,12 @@ EOF
         continue
       fi
 
-      if command ln -s "$target_path" "$source_path"; then
+      if _external-move-run "$use_sudo" /bin/ln -s "$target_path" "$source_path"; then
         printf 'xmv：迁移完成：%s -> %s\n' "$source_path" "$target_path"
       else
         printf 'xmv：创建链接失败，正在把数据移回原处。\n' >&2
-        if _external-move-copy "$target_path" "$source_path" && \
-          command rm -rf "$target_path"; then
+        if _external-move-copy "$target_path" "$source_path" "$use_sudo" && \
+          _external-move-run "$use_sudo" /bin/rm -rf "$target_path"; then
           printf 'xmv：已回滚，数据仍在原路径：%s\n' "$source_path" >&2
         else
           printf 'xmv：自动回滚未完整完成，请检查这两个位置：\n' >&2
@@ -267,25 +318,32 @@ EOF
       if (( dry_run )); then
         printf '[预览] 移除链接：%s\n' "$source_path"
         printf '[预览] 移回：%s -> %s\n' "$target_path" "$source_path"
+        (( use_sudo )) && printf '[预览] 需要管理员权限：是\n'
         continue
       fi
 
-      if ! command rm "$source_path"; then
+      if (( use_sudo )) && ! command sudo -v; then
+        printf 'xmv：未获得管理员权限：%s\n' "$source_path" >&2
+        result=1
+        continue
+      fi
+
+      if ! _external-move-run "$use_sudo" /bin/rm "$source_path"; then
         printf 'xmv：无法移除原符号链接：%s\n' "$source_path" >&2
         result=1
         continue
       fi
 
-      if ! _external-move-copy "$target_path" "$source_path"; then
+      if ! _external-move-copy "$target_path" "$source_path" "$use_sudo"; then
         printf 'xmv：恢复失败，正在重新创建符号链接。\n' >&2
-        if ! command ln -s "$target_path" "$source_path"; then
+        if ! _external-move-run "$use_sudo" /bin/ln -s "$target_path" "$source_path"; then
           printf 'xmv：链接重建失败！数据当前位于：%s\n' "$target_path" >&2
         fi
         result=1
         continue
       fi
 
-      if command rm -rf "$target_path"; then
+      if _external-move-run "$use_sudo" /bin/rm -rf "$target_path"; then
         printf 'xmv：已恢复到 Mac：%s\n' "$source_path"
       else
         printf 'xmv：数据已恢复到 Mac，但无法删除硬盘副本：%s\n' "$target_path" >&2
@@ -313,20 +371,27 @@ EOF
 
     if (( dry_run )); then
       printf '[预览] 移回：%s -> %s\n' "$target_path" "$source_path"
+      (( use_sudo )) && printf '[预览] 需要管理员权限：是\n'
       continue
     fi
 
-    command mkdir -p "${source_path:h}" || {
+    if (( use_sudo )) && ! command sudo -v; then
+      printf 'xmv：未获得管理员权限：%s\n' "$source_path" >&2
+      result=1
+      continue
+    fi
+
+    _external-move-run "$use_sudo" /bin/mkdir -p "${source_path:h}" || {
       printf 'xmv：无法创建原路径的父目录：%s\n' "${source_path:h}" >&2
       result=1
       continue
     }
-    if ! _external-move-copy "$target_path" "$source_path"; then
+    if ! _external-move-copy "$target_path" "$source_path" "$use_sudo"; then
       printf 'xmv：恢复失败，数据仍在硬盘中：%s\n' "$target_path" >&2
       result=1
       continue
     fi
-    if command rm -rf "$target_path"; then
+    if _external-move-run "$use_sudo" /bin/rm -rf "$target_path"; then
       printf 'xmv：已恢复到 Mac：%s\n' "$source_path"
     else
       printf 'xmv：数据已恢复到 Mac，但无法删除硬盘副本：%s\n' "$target_path" >&2
