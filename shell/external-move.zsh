@@ -1,3 +1,71 @@
+# 使用可续传的临时目录复制数据，成功后再原子放入最终位置。
+_external-move-copy() {
+  emulate -L zsh
+  setopt local_options no_sh_word_split
+
+  local source_path="$1"
+  local target_path="$2"
+  local target_parent="${target_path:h}"
+  local target_name="${target_path:t}"
+  local partial_root="${target_parent}/.${target_name}.xmv-partial"
+  local partial_item="${partial_root}/${source_path:t}"
+  local marker_path="${partial_root}/.xmv-source"
+  local recorded_source
+
+  command mkdir -p "$target_parent" || {
+    printf 'xmv：无法创建目标目录：%s\n' "$target_parent" >&2
+    return 1
+  }
+
+  if [[ -e "$partial_root" || -L "$partial_root" ]]; then
+    if [[ ! -d "$partial_root" || -L "$partial_root" || ! -f "$marker_path" ]]; then
+      printf 'xmv：发现无法识别的临时路径，请先人工确认：%s\n' "$partial_root" >&2
+      return 1
+    fi
+    recorded_source="$(<"$marker_path")"
+    if [[ "$recorded_source" != "$source_path" ]]; then
+      printf 'xmv：临时目录属于其他源路径，请先人工确认：%s\n' "$partial_root" >&2
+      return 1
+    fi
+    printf 'xmv：发现上次未完成的复制，正在继续：%s\n' "$source_path"
+  else
+    command mkdir "$partial_root" || {
+      printf 'xmv：无法创建临时目录：%s\n' "$partial_root" >&2
+      return 1
+    }
+    if ! printf '%s\n' "$source_path" >| "$marker_path"; then
+      printf 'xmv：无法记录临时目录来源：%s\n' "$marker_path" >&2
+      command rmdir "$partial_root" 2>/dev/null
+      return 1
+    fi
+  fi
+
+  printf 'xmv：开始复制，下面会实时显示每个文件的进度。\n'
+  if ! command rsync -aEHh --partial --progress "$source_path" "$partial_root/"; then
+    printf 'xmv：复制未完成，Mac 原件保持不变；下次执行可继续复制。\n' >&2
+    printf 'xmv：未完成的数据位于：%s\n' "$partial_root" >&2
+    return 1
+  fi
+
+  if [[ ! -e "$partial_item" && ! -L "$partial_item" ]]; then
+    printf 'xmv：复制完成后未找到预期数据：%s\n' "$partial_item" >&2
+    return 1
+  fi
+  if [[ -e "$target_path" || -L "$target_path" ]]; then
+    printf 'xmv：复制期间最终目标被占用，未覆盖它：%s\n' "$target_path" >&2
+    return 1
+  fi
+  if ! command mv "$partial_item" "$target_path"; then
+    printf 'xmv：无法把复制结果放入最终位置：%s\n' "$target_path" >&2
+    return 1
+  fi
+
+  command rm "$marker_path" 2>/dev/null
+  command rmdir "$partial_root" 2>/dev/null || \
+    printf 'xmv：数据已复制，但临时目录未能清理：%s\n' "$partial_root" >&2
+  return 0
+}
+
 # 将主目录中的文件迁移到外置 NVMe，并在原位置保留符号链接。
 external-move() {
   emulate -L zsh
@@ -26,7 +94,7 @@ external-move() {
   xmv --restore [--dry-run] <路径> [更多路径...]
 
 默认把路径移动到 /Volumes/nvme0n1 下的同名绝对路径，并在原位置
-创建符号链接。例如：
+创建符号链接。复制时会实时显示进度，成功前不会删除 Mac 原件。例如：
   xmv ~/Documents/archive
   # /Users/Eric/Documents/archive
   # → /Volumes/nvme0n1/Users/Eric/Documents/archive
@@ -73,7 +141,7 @@ EOF
     return 1
   fi
 
-  local raw_path source_path target_path target_parent
+  local raw_path source_path target_path
   local link_value link_path
   for raw_path in "$@"; do
     source_path="${raw_path:a}"
@@ -86,7 +154,6 @@ EOF
     fi
 
     target_path="${drive_root}${source_path}"
-    target_parent="${target_path:h}"
 
     if [[ "$mode" == "move" ]]; then
       if [[ -L "$source_path" ]]; then
@@ -145,14 +212,15 @@ EOF
         continue
       fi
 
-      command mkdir -p "$target_parent" || {
-        printf 'xmv：无法创建硬盘目录：%s\n' "$target_parent" >&2
+      if ! _external-move-copy "$source_path" "$target_path"; then
         result=1
         continue
-      }
+      fi
 
-      if ! command mv "$source_path" "$target_path"; then
-        printf 'xmv：移动失败，原路径未改为链接：%s\n' "$source_path" >&2
+      if ! command rm -rf "$source_path"; then
+        printf 'xmv：复制已完成，但无法删除 Mac 原件。两处数据均被保留：\n' >&2
+        printf '  Mac：%s\n' "$source_path" >&2
+        printf '  硬盘：%s\n' "$target_path" >&2
         result=1
         continue
       fi
@@ -161,10 +229,13 @@ EOF
         printf 'xmv：迁移完成：%s -> %s\n' "$source_path" "$target_path"
       else
         printf 'xmv：创建链接失败，正在把数据移回原处。\n' >&2
-        if command mv "$target_path" "$source_path"; then
+        if _external-move-copy "$target_path" "$source_path" && \
+          command rm -rf "$target_path"; then
           printf 'xmv：已回滚，数据仍在原路径：%s\n' "$source_path" >&2
         else
-          printf 'xmv：回滚失败！数据当前位于：%s\n' "$target_path" >&2
+          printf 'xmv：自动回滚未完整完成，请检查这两个位置：\n' >&2
+          printf '  Mac：%s\n' "$source_path" >&2
+          printf '  硬盘：%s\n' "$target_path" >&2
         fi
         result=1
       fi
@@ -205,13 +276,19 @@ EOF
         continue
       fi
 
-      if command mv "$target_path" "$source_path"; then
-        printf 'xmv：已恢复到 Mac：%s\n' "$source_path"
-      else
+      if ! _external-move-copy "$target_path" "$source_path"; then
         printf 'xmv：恢复失败，正在重新创建符号链接。\n' >&2
         if ! command ln -s "$target_path" "$source_path"; then
           printf 'xmv：链接重建失败！数据当前位于：%s\n' "$target_path" >&2
         fi
+        result=1
+        continue
+      fi
+
+      if command rm -rf "$target_path"; then
+        printf 'xmv：已恢复到 Mac：%s\n' "$source_path"
+      else
+        printf 'xmv：数据已恢复到 Mac，但无法删除硬盘副本：%s\n' "$target_path" >&2
         result=1
       fi
       continue
@@ -244,10 +321,15 @@ EOF
       result=1
       continue
     }
-    if command mv "$target_path" "$source_path"; then
+    if ! _external-move-copy "$target_path" "$source_path"; then
+      printf 'xmv：恢复失败，数据仍在硬盘中：%s\n' "$target_path" >&2
+      result=1
+      continue
+    fi
+    if command rm -rf "$target_path"; then
       printf 'xmv：已恢复到 Mac：%s\n' "$source_path"
     else
-      printf 'xmv：恢复失败，数据仍在硬盘中：%s\n' "$target_path" >&2
+      printf 'xmv：数据已恢复到 Mac，但无法删除硬盘副本：%s\n' "$target_path" >&2
       result=1
     fi
   done
