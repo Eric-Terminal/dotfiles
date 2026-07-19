@@ -44,6 +44,20 @@ _external-eject-scan() {
   fi
 }
 
+_external-eject-send-signal() {
+  emulate -L zsh
+
+  local pid="$1"
+  local owner="$2"
+  local signal="$3"
+
+  if [[ "$owner" == "$USER" || "$owner" == "$EUID" ]]; then
+    /bin/kill -"$signal" "$pid" 2>/dev/null
+  else
+    /usr/bin/sudo /bin/kill -"$signal" "$pid"
+  fi
+}
+
 # 路径过长时保留首尾，既能看到所属应用，也能辨认最终文件。
 _external-eject-fit() {
   emulate -L zsh
@@ -87,6 +101,7 @@ external-eject() {
   local target='/Volumes/nvme0n1'
   local mount_point eject_output answer confirmation selector
   local pid process owner count sample signal index
+  local target_count success_count failure_count
   local elevated=0 should_eject=1 path_width
   local -a pids processes owners counts samples
   local -A pid_by_index process_by_pid owner_by_pid
@@ -109,7 +124,7 @@ external-eject() {
 默认卷：/Volumes/nvme0n1
 
 xeject 会先尝试正常推出；若卷正被占用，则按进程汇总占用项并进入交互菜单。
-菜单中可输入序号或 PID 发送 TERM，输入“k 序号”在二次确认后发送 KILL。
+输入序号或 PID 可发送 TERM；“k 序号”发送 KILL；“a”与“ka”分别处理全部进程。
 EOF
         return 0
         ;;
@@ -211,9 +226,9 @@ EOF
       done
     fi
 
-    printf '\n%s操作%s：序号/PID 结束进程 · k 序号/PID 强制结束 · r 重试推出 · s 重新扫描' \
-      "$c_bold" "$c_reset"
-    (( elevated )) || printf ' · p 管理员扫描'
+    printf '\n%s操作%s：序号/PID 结束 · k 序号/PID 强制结束\n' "$c_bold" "$c_reset"
+    printf '      a 全部结束 · ka 全部强制结束 · r 推出 · s 扫描'
+    (( elevated )) || printf ' · p 管理员'
     printf ' · q 取消\n'
     printf '%sxeject>%s ' "$c_cyan" "$c_reset"
     read -r answer || return 1
@@ -236,6 +251,54 @@ EOF
         continue
         ;;
     esac
+
+    if [[ "${answer:l}" == a || "${answer:l}" == ka ]]; then
+      signal=TERM
+      [[ "${answer:l}" == ka ]] && signal=KILL
+
+      target_count=0
+      for pid in "${pids[@]}"; do
+        [[ "$pid" == $$ ]] || (( target_count++ ))
+      done
+
+      if (( target_count == 0 )); then
+        printf '%sxeject：当前没有可结束的占用进程。%s\n' "$c_yellow" "$c_reset"
+        continue
+      fi
+
+      if [[ "$signal" == KILL ]]; then
+        printf '%s强制结束全部 %d 个占用进程可能造成未保存数据丢失，确认吗？[y/N]%s ' \
+          "$c_red" "$target_count" "$c_reset"
+      else
+        printf '结束全部 %d 个占用进程？未保存的数据可能丢失。[y/N] ' "$target_count"
+      fi
+      read -r confirmation || return 1
+      [[ "${confirmation:l}" == y || "${confirmation:l}" == yes || "$confirmation" == 是 ]] || {
+        printf 'xeject：没有结束任何进程。\n'
+        continue
+      }
+
+      success_count=0
+      failure_count=0
+      for (( index = 1; index <= ${#pids}; index++ )); do
+        pid="${pids[$index]}"
+        [[ "$pid" == $$ ]] && continue
+
+        if _external-eject-send-signal "$pid" "${owners[$index]}" "$signal"; then
+          (( success_count++ ))
+        else
+          (( failure_count++ ))
+        fi
+      done
+
+      printf 'xeject：已向 %d 个进程发送 %s' "$success_count" "$signal"
+      (( failure_count > 0 )) && \
+        printf '，另有 %d 个进程已退出或权限不足' "$failure_count"
+      printf '；稍后重试推出。\n'
+      /bin/sleep 1
+      should_eject=1
+      continue
+    fi
 
     signal=TERM
     selector="$answer"
@@ -279,13 +342,7 @@ EOF
       continue
     }
 
-    if [[ "$owner" == "$USER" ]]; then
-      /bin/kill -"$signal" "$pid" 2>/dev/null
-    else
-      /usr/bin/sudo /bin/kill -"$signal" "$pid"
-    fi
-
-    if (( $? != 0 )); then
+    if ! _external-eject-send-signal "$pid" "$owner" "$signal"; then
       printf '%sxeject：无法结束 PID %s；它可能已经退出，或当前权限不足。%s\n' \
         "$c_red" "$pid" "$c_reset"
       continue

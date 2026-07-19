@@ -30,6 +30,16 @@ _external-eject-fit '/Volumes/nvme0n1/Applications/Xcode.app/Contents/MacOS/Xcod
 
 [[ "$(alias xeject)" == "xeject=external-eject" ]]
 external-eject --help | /usr/bin/grep -q '默认卷：/Volumes/nvme0n1'
+external-eject --help | /usr/bin/grep -q '“a”与“ka”分别处理全部进程'
+
+/bin/sleep 30 &
+test_pid=$!
+_external-eject-send-signal "$test_pid" "$USER" TERM
+wait "$test_pid" 2>/dev/null || true
+if /bin/kill -0 "$test_pid" 2>/dev/null; then
+  printf 'external-eject：TERM 应当结束测试进程。\n' >&2
+  exit 1
+fi
 
 if external-eject --unknown >/dev/null 2>&1; then
   printf 'external-eject：未知选项应当返回失败。\n' >&2
