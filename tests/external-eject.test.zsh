@@ -31,6 +31,7 @@ _external-eject-fit '/Volumes/nvme0n1/Applications/Xcode.app/Contents/MacOS/Xcod
 [[ "$(alias xeject)" == "xeject=external-eject" ]]
 external-eject --help | /usr/bin/grep -q '默认卷：/Volumes/nvme0n1'
 external-eject --help | /usr/bin/grep -q '“a”与“ka”分别处理全部进程'
+external-eject --help | /usr/bin/grep -q '严格的只扫描模式'
 
 /bin/sleep 30 &
 test_pid=$!

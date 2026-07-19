@@ -102,7 +102,7 @@ external-eject() {
   local mount_point eject_output answer confirmation selector
   local pid process owner count sample signal index
   local target_count success_count failure_count
-  local elevated=0 should_eject=1 path_width
+  local scan_only=0 elevated=0 should_eject=1 path_width
   local -a pids processes owners counts samples
   local -A pid_by_index process_by_pid owner_by_pid
 
@@ -125,10 +125,12 @@ external-eject() {
 
 xeject 会先尝试正常推出；若卷正被占用，则按进程汇总占用项并进入交互菜单。
 输入序号或 PID 可发送 TERM；“k 序号”发送 KILL；“a”与“ka”分别处理全部进程。
+--scan 是严格的只扫描模式；结束进程后只会重新扫描，不会推出卷。
 EOF
         return 0
         ;;
       --scan)
+        scan_only=1
         should_eject=0
         shift
         ;;
@@ -227,7 +229,12 @@ EOF
     fi
 
     printf '\n%s操作%s：序号/PID 结束 · k 序号/PID 强制结束\n' "$c_bold" "$c_reset"
-    printf '      a 全部结束 · ka 全部强制结束 · r 推出 · s 扫描'
+    printf '      a 全部结束 · ka 全部强制结束'
+    if (( scan_only )); then
+      printf ' · s 重新扫描'
+    else
+      printf ' · r 推出 · s 扫描'
+    fi
     (( elevated )) || printf ' · p 管理员'
     printf ' · q 取消\n'
     printf '%sxeject>%s ' "$c_cyan" "$c_reset"
@@ -239,6 +246,10 @@ EOF
         return 1
         ;;
       r)
+        if (( scan_only )); then
+          printf 'xeject：--scan 模式不会推出卷；请退出后运行普通 xeject。\n'
+          continue
+        fi
         should_eject=1
         continue
         ;;
@@ -294,9 +305,13 @@ EOF
       printf 'xeject：已向 %d 个进程发送 %s' "$success_count" "$signal"
       (( failure_count > 0 )) && \
         printf '，另有 %d 个进程已退出或权限不足' "$failure_count"
-      printf '；稍后重试推出。\n'
+      if (( scan_only )); then
+        printf '；稍后重新扫描。\n'
+      else
+        printf '；稍后重试推出。\n'
+      fi
       /bin/sleep 1
-      should_eject=1
+      should_eject=$(( !scan_only ))
       continue
     fi
 
@@ -348,9 +363,15 @@ EOF
       continue
     fi
 
-    printf 'xeject：已向 %s（PID %s）发送 %s，稍后重试推出。\n' "$process" "$pid" "$signal"
+    if (( scan_only )); then
+      printf 'xeject：已向 %s（PID %s）发送 %s，稍后重新扫描。\n' \
+        "$process" "$pid" "$signal"
+    else
+      printf 'xeject：已向 %s（PID %s）发送 %s，稍后重试推出。\n' \
+        "$process" "$pid" "$signal"
+    fi
     /bin/sleep 1
-    should_eject=1
+    should_eject=$(( !scan_only ))
   done
 }
 
