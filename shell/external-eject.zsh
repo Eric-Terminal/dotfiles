@@ -36,10 +36,10 @@ _external-eject-scan() {
   local elevated="$2"
 
   if (( elevated )); then
-    /usr/bin/sudo /usr/sbin/lsof -nP -FpcuLfn -- "$mount_point" 2>/dev/null |
+    /usr/bin/sudo -n /usr/sbin/lsof -nP -FpcuLfn +f -- "$mount_point" 2>/dev/null |
       _external-eject-summarize
   else
-    /usr/sbin/lsof -nP -FpcuLfn -- "$mount_point" 2>/dev/null |
+    /usr/sbin/lsof -nP -FpcuLfn +f -- "$mount_point" 2>/dev/null |
       _external-eject-summarize
   fi
 }
@@ -189,6 +189,14 @@ EOF
     pid_by_index=()
     process_by_pid=()
     owner_by_pid=()
+
+    if (( elevated )); then
+      # 认证必须发生在前台，sudo 才能关闭密码回显并启用终端的安全输入。
+      if ! /usr/bin/sudo -n -v 2>/dev/null && ! /usr/bin/sudo -v; then
+        printf '%sxeject：管理员认证失败，已恢复普通扫描。%s\n' "$c_red" "$c_reset" >&2
+        elevated=0
+      fi
+    fi
 
     while IFS=$'\t' read -r pid process owner count sample; do
       [[ "$pid" == <-> ]] || continue
