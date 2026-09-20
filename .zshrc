@@ -46,7 +46,23 @@ fi
 export ZSH="$HOME/.oh-my-zsh"
 ZSH_THEME="powerlevel10k/powerlevel10k"
 
-plugins=(git zsh-syntax-highlighting zsh-autosuggestions)
+# fzf-tab 必须晚于 fzf、早于建议和高亮加载，避免 Tab 的绑定被覆盖。
+plugins=(
+  git
+  fzf
+  fzf-tab
+  colored-man-pages
+  extract
+  copypath
+  copyfile
+  zsh-autosuggestions
+  zsh-syntax-highlighting
+)
+
+# 在 Oh My Zsh 初始化补全前添加定义，避免再次运行 compinit。
+zsh_extra_completions="${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-completions/src"
+[[ -d "$zsh_extra_completions" ]] && fpath=("$zsh_extra_completions" ${fpath:#$zsh_extra_completions})
+unset zsh_extra_completions
 
 [[ -d "$HOME/.docker/completions" ]] && fpath=($HOME/.docker/completions ${fpath:#$HOME/.docker/completions})
 
@@ -56,6 +72,7 @@ ZSH_COMPDUMP="$zsh_cache_dir/.zcompdump-${HOST:-zsh}-${ZSH_VERSION}"
 unset zsh_cache_dir
 
 [[ -s "$ZSH/oh-my-zsh.sh" ]] && source "$ZSH/oh-my-zsh.sh"
+[[ -f "$HOME/dotfiles/shell/interactive-tools.zsh" ]] && source "$HOME/dotfiles/shell/interactive-tools.zsh"
 
 # ================= Eric 的常用配置 =================
 
