@@ -82,6 +82,9 @@ alias l='ls -CF'
 alias cx='codex'
 alias cc='claude'
 
+# 临时停止 Steam 后台服务，下次打开 Steam 时可恢复。
+alias steamstop='launchctl bootout "user/$(id -u)/com.valvesoftware.steam.ipctool"'
+
 export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
 
 export PATH="$PATH:$HOME/.local/bin"
