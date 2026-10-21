@@ -518,7 +518,6 @@ EOF
     return 0
   fi
   disks=("${(@0)disk_output}")
-  printf 'xeject：检测到 %d 块外置物理盘，将依次处理。\n' "${#disks}"
 
   for disk in "${disks[@]}"; do
     if ! mount_output="$(_external-eject-disks "$disk")"; then
@@ -527,7 +526,6 @@ EOF
     fi
     mount_points=()
     [[ -n "$mount_output" ]] && mount_points=("${(@0)mount_output}")
-    printf '\nxeject：处理 %s%s\n' "$disk" "${mount_output:+（${(j:、:)mount_points}）}"
     result=0
     _external-eject-one "/dev/$disk" "$scan_only" "$(( ${#disks} > 1 ))" "${mount_points[@]}" || result=$?
     case "$result" in
