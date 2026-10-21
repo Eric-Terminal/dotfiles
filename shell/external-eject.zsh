@@ -34,14 +34,30 @@ _external-eject-scan() {
 
   local mount_point="$1"
   local elevated="$2"
+  local scan_output scan_errors scan_status=0
 
-  if (( elevated )); then
-    /usr/bin/sudo -n /usr/sbin/lsof -nP -FpcuLfn +f -- "$mount_point" 2>/dev/null |
-      _external-eject-summarize
-  else
-    /usr/sbin/lsof -nP -FpcuLfn +f -- "$mount_point" 2>/dev/null |
-      _external-eject-summarize
-  fi
+  scan_errors="$(/usr/bin/mktemp -t xeject)" || return 1
+  {
+    if (( elevated )); then
+      scan_output="$(/usr/bin/sudo -n /usr/sbin/lsof -nP -FpcuLfn +f -- "$mount_point" 2>"$scan_errors")" || scan_status=$?
+    else
+      scan_output="$(/usr/sbin/lsof -nP -FpcuLfn +f -- "$mount_point" 2>"$scan_errors")" || scan_status=$?
+    fi
+
+    # lsof 在没有匹配项时也返回 1；只有无输出、无诊断时才把它视为空结果。
+    # 有警告的扫描可能遗漏进程，不能据此宣称卷没有被占用。
+    if (( scan_status == 1 )) && [[ -z "$scan_output" && ! -s "$scan_errors" ]]; then
+      scan_status=0
+    fi
+    if (( scan_status != 0 )) || [[ -s "$scan_errors" ]]; then
+      /bin/cat "$scan_errors" >&2
+      return 1
+    fi
+
+    _external-eject-summarize <<< "$scan_output"
+  } always {
+    /bin/rm -f -- "$scan_errors"
+  }
 }
 
 _external-eject-send-signal() {
@@ -56,6 +72,25 @@ _external-eject-send-signal() {
   else
     /usr/bin/sudo /bin/kill -"$signal" "$pid"
   fi
+}
+
+# 批量操作共用一个等待期限；ps 能检查其他用户的进程，避免 kill -0 把无权限误判为退出。
+_external-eject-wait() {
+  emulate -L zsh
+
+  local selected_pids="${(j:,:)@}"
+  local -F SECONDS=0
+
+  [[ -n "$selected_pids" ]] || return 0
+  printf 'xeject：等待进程退出（最多约 5 秒）……\n'
+  while [[ -n "$(/bin/ps -p "$selected_pids" -o pid=)" ]]; do
+    if (( SECONDS >= 5 )); then
+      printf 'xeject：部分进程尚未退出，将重新扫描占用情况。\n'
+      return 1
+    fi
+    /bin/sleep 0.2
+  done
+  return 0
 }
 
 # 路径过长时保留首尾，既能看到所属应用，也能辨认最终文件。
@@ -99,11 +134,11 @@ external-eject() {
   emulate -L zsh
 
   local target='/Volumes/nvme0n1'
-  local mount_point eject_output answer confirmation selector
+  local mount_point eject_output scan_output answer confirmation selector
   local pid process owner count sample signal index
   local target_count success_count failure_count
-  local scan_only=0 elevated=0 should_eject=1 path_width
-  local -a pids processes owners counts samples
+  local scan_only=0 elevated=0 should_eject=1 scan_failed path_width
+  local -a pids processes owners counts samples signaled_pids
   local -A pid_by_index process_by_pid owner_by_pid
 
   local c_bold=$'\e[1m'
@@ -125,6 +160,7 @@ external-eject() {
 
 xeject 会先尝试正常推出；若卷正被占用，则按进程汇总占用项并进入交互菜单。
 输入序号或 PID 可发送 TERM；“k 序号”发送 KILL；“a”与“ka”分别处理全部进程。
+“h”会将当前终端切换到主目录，再重试推出；扫描模式下只重新扫描。
 --scan 是严格的只扫描模式；结束进程后只会重新扫描，不会推出卷。
 EOF
         return 0
@@ -198,6 +234,9 @@ EOF
       fi
     fi
 
+    # 先取得扫描状态，避免进程替换吞掉失败并被误报成没有占用。
+    scan_failed=0
+    scan_output="$(_external-eject-scan "$mount_point" "$elevated")" || scan_failed=1
     while IFS=$'\t' read -r pid process owner count sample; do
       [[ "$pid" == <-> ]] || continue
       pids+=("$pid")
@@ -205,10 +244,13 @@ EOF
       owners+=("${owner:-未知用户}")
       counts+=("${count:-0}")
       samples+=("$sample")
-    done < <(_external-eject-scan "$mount_point" "$elevated")
+    done <<< "$scan_output"
 
     printf '\n%s%s 的占用情况%s\n' "$c_bold" "$mount_point" "$c_reset"
-    if (( ${#pids} == 0 )); then
+    if (( scan_failed )); then
+      printf '%s扫描未能完整完成，无法确定占用情况；可输入 s 重试或 p 使用管理员扫描。%s\n' \
+        "$c_red" "$c_reset"
+    elif (( ${#pids} == 0 )); then
       printf '%s当前扫描没有发现占用进程。%s\n' "$c_yellow" "$c_reset"
     else
       for (( index = 1; index <= ${#pids}; index++ )); do
@@ -226,7 +268,7 @@ EOF
           "$c_cyan" "$index" "$c_reset" "$pid" "$c_bold" "$process" "$c_reset" \
           "$c_dim" "$owner" "$count" "$c_reset"
         [[ "$pid" == $$ ]] && \
-          printf '    %s这是当前终端，请先执行 cd ~，不要结束它。%s\n' "$c_yellow" "$c_reset"
+          printf '    %s这是当前终端，可输入 h 返回主目录后重试。%s\n' "$c_yellow" "$c_reset"
         if [[ -n "$sample" ]]; then
           path_width=$(( ${COLUMNS:-80} - 4 ))
           (( path_width >= 32 )) || path_width=76
@@ -243,6 +285,7 @@ EOF
     else
       printf ' · r 推出 · s 扫描'
     fi
+    printf ' · h 回到主目录'
     (( elevated )) || printf ' · p 管理员'
     printf ' · q 取消\n'
     printf '%sxeject>%s ' "$c_cyan" "$c_reset"
@@ -262,6 +305,16 @@ EOF
         continue
         ;;
       s|'')
+        continue
+        ;;
+      h)
+        # 直接改变调用者的目录；恢复原目录会再次占用刚要推出的卷。
+        if builtin cd -- "$HOME"; then
+          printf 'xeject：当前目录已切换到 %s。\n' "$PWD"
+          should_eject=$(( !scan_only ))
+        else
+          printf 'xeject：无法切换到主目录，当前目录未改变。\n' >&2
+        fi
         continue
         ;;
       p)
@@ -299,12 +352,14 @@ EOF
 
       success_count=0
       failure_count=0
+      signaled_pids=()
       for (( index = 1; index <= ${#pids}; index++ )); do
         pid="${pids[$index]}"
         [[ "$pid" == $$ ]] && continue
 
         if _external-eject-send-signal "$pid" "${owners[$index]}" "$signal"; then
           (( success_count++ ))
+          signaled_pids+=("$pid")
         else
           (( failure_count++ ))
         fi
@@ -318,8 +373,10 @@ EOF
       else
         printf '；稍后重试推出。\n'
       fi
-      /bin/sleep 1
-      should_eject=$(( !scan_only ))
+      should_eject=0
+      if _external-eject-wait "${signaled_pids[@]}"; then
+        should_eject=$(( !scan_only ))
+      fi
       continue
     fi
 
@@ -348,7 +405,7 @@ EOF
     owner="${owner_by_pid[$pid]}"
 
     if [[ "$pid" == $$ ]]; then
-      printf '%sxeject：不会结束当前终端。请先执行 cd ~，再输入 r。%s\n' "$c_yellow" "$c_reset"
+      printf '%sxeject：不会结束当前终端。可输入 h 返回主目录后重试。%s\n' "$c_yellow" "$c_reset"
       continue
     fi
 
@@ -378,8 +435,10 @@ EOF
       printf 'xeject：已向 %s（PID %s）发送 %s，稍后重试推出。\n' \
         "$process" "$pid" "$signal"
     fi
-    /bin/sleep 1
-    should_eject=$(( !scan_only ))
+    should_eject=0
+    if _external-eject-wait "$pid"; then
+      should_eject=$(( !scan_only ))
+    fi
   done
 }
 
