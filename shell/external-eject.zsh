@@ -32,16 +32,19 @@ _external-eject-summarize() {
 _external-eject-scan() {
   emulate -L zsh
 
-  local mount_point="$1"
-  local elevated="$2"
+  local elevated="$1"
   local scan_output scan_errors scan_status=0
+  shift
+
+  # 未挂载的物理盘仍可正常推出，但没有文件系统可供 lsof 扫描。
+  (( $# )) || return 0
 
   scan_errors="$(/usr/bin/mktemp -t xeject)" || return 1
   {
     if (( elevated )); then
-      scan_output="$(/usr/bin/sudo -n /usr/sbin/lsof -nP -FpcuLfn +f -- "$mount_point" 2>"$scan_errors")" || scan_status=$?
+      scan_output="$(/usr/bin/sudo -n /usr/sbin/lsof -nP -FpcuLfn +f -- "$@" 2>"$scan_errors")" || scan_status=$?
     else
-      scan_output="$(/usr/sbin/lsof -nP -FpcuLfn +f -- "$mount_point" 2>"$scan_errors")" || scan_status=$?
+      scan_output="$(/usr/sbin/lsof -nP -FpcuLfn +f -- "$@" 2>"$scan_errors")" || scan_status=$?
     fi
 
     # lsof 在没有匹配项时也返回 1；只有无输出、无诊断时才把它视为空结果。
@@ -130,14 +133,59 @@ _external-eject-mount-point() {
   [[ -n "$REPLY" && "$REPLY" != null && -d "$REPLY" ]]
 }
 
-external-eject() {
+# 无参数时列出外置物理盘；传入盘符时查找它的挂载点，包括 APFS 合成卷。
+_external-eject-disks() {
   emulate -L zsh
 
-  local target='/Volumes/nvme0n1'
+  local disk="${1:-}" disk_list
+  if [[ -n "$disk" ]]; then
+    disk_list="$(/usr/sbin/diskutil list -plist external)" || return 1
+  else
+    # external 本身也包含磁盘镜像，必须加 physical 才是实际接入的硬盘。
+    disk_list="$(/usr/sbin/diskutil list -plist external physical)" || return 1
+  fi
+
+  disk_list="$(/usr/bin/plutil -convert json -o - - <<< "$disk_list")" || return 1
+  # 系统 Python 可能由装在外置盘上的 Xcode 提供，推出后不能再依赖它解析下一块盘。
+  /usr/bin/osascript -l JavaScript -e '
+function run(argv) {
+  const data = JSON.parse(argv[0]);
+  const disk = argv[1];
+  if (!disk) return data.WholeDisks.join("\0");
+
+  const values = [];
+  for (const entry of data.AllDisksAndPartitions) {
+    let volumes = [];
+    if (entry.DeviceIdentifier === disk) {
+      volumes = [entry].concat(entry.Partitions || []);
+    }
+    if ((entry.APFSPhysicalStores || []).some(store =>
+      store.DeviceIdentifier === disk || store.DeviceIdentifier.startsWith(disk + "s")
+    )) {
+      volumes = volumes.concat(entry.APFSVolumes || []);
+    }
+    for (const volume of volumes) {
+      if (volume.MountPoint && !values.includes(volume.MountPoint)) {
+        values.push(volume.MountPoint);
+      }
+    }
+  }
+  // NUL 分隔避免含空格的卷名被拆分，不解析供人阅读的磁盘列表。
+  return values.join("\0");
+}
+' "$disk_list" "$disk"
+}
+
+_external-eject-one() {
+  emulate -L zsh
+
+  local target="$1" scan_only="$2" batch_mode="$3"
+  shift 3
+  local -a mount_points=("$@")
   local mount_point eject_output scan_output answer confirmation selector
   local pid process owner count sample signal index
   local target_count success_count failure_count
-  local scan_only=0 elevated=0 should_eject=1 scan_failed path_width
+  local elevated=0 should_eject=$(( !scan_only )) scan_failed path_width
   local -a pids processes owners counts samples signaled_pids
   local -A pid_by_index process_by_pid owner_by_pid
 
@@ -148,65 +196,13 @@ external-eject() {
   local c_dim=$'\e[2m'
   local c_reset=$'\e[0m'
 
-  while (( $# )); do
-    case "$1" in
-      --help|-h)
-        /bin/cat <<'EOF'
-用法：
-  xeject [卷路径或卷名]
-  xeject --scan [卷路径或卷名]
-
-默认卷：/Volumes/nvme0n1
-
-xeject 会先尝试正常推出；若卷正被占用，则按进程汇总占用项并进入交互菜单。
-输入序号或 PID 可发送 TERM；“k 序号”发送 KILL；“a”与“ka”分别处理全部进程。
-“h”会将当前终端切换到主目录，再重试推出；扫描模式下只重新扫描。
---scan 是严格的只扫描模式；结束进程后只会重新扫描，不会推出卷。
-EOF
-        return 0
-        ;;
-      --scan)
-        scan_only=1
-        should_eject=0
-        shift
-        ;;
-      --)
-        shift
-        break
-        ;;
-      -*)
-        printf 'xeject：未知选项：%s\n' "$1" >&2
-        printf '运行 xeject --help 查看用法。\n' >&2
-        return 2
-        ;;
-      *)
-        break
-        ;;
-    esac
-  done
-
-  if (( $# > 1 )); then
-    printf 'xeject：一次只能处理一个卷。\n' >&2
-    return 2
-  elif (( $# == 1 )); then
-    target="$1"
-  fi
-
-  if [[ ! -t 0 || ! -t 1 ]]; then
-    printf 'xeject：需要在交互式终端中运行。\n' >&2
-    return 1
-  fi
-
-  if ! _external-eject-mount-point "$target"; then
-    printf 'xeject：找不到已挂载的卷：%s\n' "$target" >&2
-    return 1
-  fi
-  mount_point="$REPLY"
+  mount_point="${(j:、:)mount_points}"
+  [[ -n "$mount_point" ]] || mount_point="$target"
 
   while true; do
     if (( should_eject )); then
       printf '%sxeject%s：正在正常推出 %s……\n' "$c_bold$c_cyan" "$c_reset" "$mount_point"
-      eject_output="$(/usr/sbin/diskutil eject "$mount_point" 2>&1)"
+      eject_output="$(/usr/sbin/diskutil eject "$target" 2>&1)"
       if (( $? == 0 )); then
         printf '%sxeject：已经安全推出：%s%s\n' "$c_cyan" "$mount_point" "$c_reset"
         return 0
@@ -236,7 +232,7 @@ EOF
 
     # 先取得扫描状态，避免进程替换吞掉失败并被误报成没有占用。
     scan_failed=0
-    scan_output="$(_external-eject-scan "$mount_point" "$elevated")" || scan_failed=1
+    scan_output="$(_external-eject-scan "$elevated" "${mount_points[@]}")" || scan_failed=1
     while IFS=$'\t' read -r pid process owner count sample; do
       [[ "$pid" == <-> ]] || continue
       pids+=("$pid")
@@ -287,6 +283,7 @@ EOF
     fi
     printf ' · h 回到主目录'
     (( elevated )) || printf ' · p 管理员'
+    (( batch_mode )) && printf ' · n 跳过此盘'
     printf ' · q 取消\n'
     printf '%sxeject>%s ' "$c_cyan" "$c_reset"
     read -r answer || return 1
@@ -295,6 +292,13 @@ EOF
       q|quit|exit)
         printf 'xeject：已取消，硬盘仍保持挂载。\n'
         return 1
+        ;;
+      n)
+        if (( batch_mode )); then
+          printf 'xeject：已保留当前硬盘。\n'
+          return 2
+        fi
+        continue
         ;;
       r)
         if (( scan_only )); then
@@ -440,6 +444,101 @@ EOF
       should_eject=$(( !scan_only ))
     fi
   done
+}
+
+external-eject() {
+  emulate -L zsh
+
+  local target='' scan_only=0 disk_output mount_output disk result skipped=0
+  local -a disks mount_points
+
+  while (( $# )); do
+    case "$1" in
+      --help|-h)
+        /bin/cat <<'EOF'
+用法：
+  xeject [卷路径或卷名]
+  xeject --scan [卷路径或卷名]
+
+不指定卷时，自动识别当前连接的外置物理盘并依次处理；不会包含内置盘或磁盘镜像。
+指定卷名或路径时，只处理该卷所在的硬盘。
+
+xeject 会先尝试正常推出；若硬盘正被占用，则按进程汇总占用项并进入交互菜单。
+输入序号或 PID 可发送 TERM；“k 序号”发送 KILL；“a”与“ka”分别处理全部进程。
+多盘模式下，“n”保留当前盘并继续下一块，“q”取消后续处理。
+“h”会将当前终端切换到主目录，再重试推出；扫描模式下只重新扫描。
+--scan 是严格的只扫描模式；结束进程后只会重新扫描，不会推出卷。
+EOF
+        return 0
+        ;;
+      --scan)
+        scan_only=1
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        printf 'xeject：未知选项：%s\n' "$1" >&2
+        printf '运行 xeject --help 查看用法。\n' >&2
+        return 2
+        ;;
+      *) break ;;
+    esac
+  done
+
+  if (( $# > 1 )); then
+    printf 'xeject：只能指定一个卷；不指定时自动处理所有外置物理盘。\n' >&2
+    return 2
+  elif (( $# == 1 )); then
+    target="$1"
+  fi
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    printf 'xeject：需要在交互式终端中运行。\n' >&2
+    return 1
+  fi
+
+  if (( $# == 1 )); then
+    if ! _external-eject-mount-point "$target"; then
+      printf 'xeject：找不到已挂载的卷：%s\n' "$target" >&2
+      return 1
+    fi
+    _external-eject-one "$REPLY" "$scan_only" 0 "$REPLY"
+    return $?
+  fi
+
+  if ! disk_output="$(_external-eject-disks)"; then
+    printf 'xeject：无法读取外置物理盘列表。\n' >&2
+    return 1
+  fi
+  if [[ -z "$disk_output" ]]; then
+    printf 'xeject：当前没有连接外置物理盘。\n'
+    return 0
+  fi
+  disks=("${(@0)disk_output}")
+  printf 'xeject：检测到 %d 块外置物理盘，将依次处理。\n' "${#disks}"
+
+  for disk in "${disks[@]}"; do
+    if ! mount_output="$(_external-eject-disks "$disk")"; then
+      printf 'xeject：无法读取 %s 的挂载信息。\n' "$disk" >&2
+      return 1
+    fi
+    mount_points=()
+    [[ -n "$mount_output" ]] && mount_points=("${(@0)mount_output}")
+    printf '\nxeject：处理 %s%s\n' "$disk" "${mount_output:+（${(j:、:)mount_points}）}"
+    result=0
+    _external-eject-one "/dev/$disk" "$scan_only" "$(( ${#disks} > 1 ))" "${mount_points[@]}" || result=$?
+    case "$result" in
+      0) ;;
+      2) skipped=1 ;;
+      *) return "$result" ;;
+    esac
+  done
+
+  # 扫描时切到下一块是正常操作；推出时跳过任何硬盘都不能报告全部成功。
+  (( scan_only || !skipped ))
 }
 
 alias xeject='external-eject'

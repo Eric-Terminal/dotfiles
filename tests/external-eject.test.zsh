@@ -29,7 +29,7 @@ _external-eject-fit '/Volumes/nvme0n1/Applications/Xcode.app/Contents/MacOS/Xcod
 [[ "$REPLY" == '/Volumes/nvme0n…ents/MacOS/Xcode' ]]
 
 [[ "$(alias xeject)" == "xeject=external-eject" ]]
-external-eject --help | /usr/bin/grep -q '默认卷：/Volumes/nvme0n1'
+external-eject --help | /usr/bin/grep -q '自动识别当前连接的外置物理盘'
 external-eject --help | /usr/bin/grep -q '“a”与“ka”分别处理全部进程'
 external-eject --help | /usr/bin/grep -q '严格的只扫描模式'
 
@@ -45,18 +45,53 @@ external-eject --help | /usr/bin/grep -q '严格的只扫描模式'
   }
 
   scan_case=empty
-  output="$(_external-eject-scan /测试卷 0)"
+  output="$(_external-eject-scan 0 /测试卷)"
   [[ -z "$output" ]]
   scan_case=occupied
-  output="$(_external-eject-scan /测试卷 0)"
+  output="$(_external-eject-scan 0 /测试卷)"
   [[ "$output" == $'12345\t测试进程\tEric\t1\t/测试卷/文件' ]]
   for scan_case in failure warning; do
-    if output="$(_external-eject-scan /测试卷 0 2>&1)"; then
+    if output="$(_external-eject-scan 0 /测试卷 2>&1)"; then
       printf '扫描失败或不完整时，不应返回成功。\n' >&2
       exit 1
     fi
     [[ "$output" == *模拟扫描* ]]
   done
+)
+
+# APFS 卷与物理盘的编号不同，卷名也不能作为筛选或排序依据。
+(
+  physical_fixture='<plist version="1.0"><dict><key>WholeDisks</key><array><string>disk6</string><string>disk10</string></array></dict></plist>'
+  volumes_fixture="$(/usr/bin/plutil -convert xml1 -o - - <<'JSON'
+{"AllDisksAndPartitions": [
+  {"DeviceIdentifier": "disk6", "Partitions": []},
+  {"DeviceIdentifier": "disk7", "APFSPhysicalStores": [{"DeviceIdentifier": "disk6s2"}],
+   "APFSVolumes": [{"MountPoint": "/Volumes/工作盘"}, {"MountPoint": "/Volumes/其他资料"}]},
+  {"DeviceIdentifier": "disk10", "Partitions": [{"MountPoint": "/Volumes/Mac Backup"}]},
+  {"DeviceIdentifier": "disk61", "APFSPhysicalStores": [{"DeviceIdentifier": "disk60s1"}],
+   "APFSVolumes": [{"MountPoint": "/Volumes/磁盘镜像"}]}
+]}
+JSON
+)"
+  function /usr/sbin/diskutil() {
+    case "$*" in
+      'list -plist external physical') printf '%s' "$physical_fixture" ;;
+      'list -plist external') printf '%s' "$volumes_fixture" ;;
+      *) return 1 ;;
+    esac
+  }
+
+  output="$(_external-eject-disks)"
+  [[ "$output" == $'disk6\0disk10' ]]
+  output="$(_external-eject-disks disk6)"
+  [[ "$output" == $'/Volumes/工作盘\0/Volumes/其他资料' ]]
+  output="$(_external-eject-disks disk10)"
+  [[ "$output" == '/Volumes/Mac Backup' ]]
+  output="$(_external-eject-disks disk11)"
+  [[ -z "$output" ]]
+  physical_fixture='<plist version="1.0"><dict><key>WholeDisks</key><array/></dict></plist>'
+  output="$(_external-eject-disks)"
+  [[ -z "$output" ]]
 )
 
 /bin/sleep 30 &

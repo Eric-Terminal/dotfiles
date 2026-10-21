@@ -31,6 +31,21 @@ ln -sf "$PWD/.gitconfig" "$HOME/.gitconfig"
 
 执行前建议先备份原文件。
 
+## 外置硬盘推出
+
+`xeject` 不带参数时自动识别当前连接的外置物理盘，依次尝试正常推出，排除内置盘和磁盘镜像。
+不依赖卷名，也不需要配置多块盘的优先级。指定卷名时仍可单独处理：
+
+```sh
+xeject
+xeject "Mac Backup"
+xeject --scan
+```
+
+推出失败后会列出占用进程；结束进程前需要确认。多盘菜单中，`n` 保留当前盘并继续，`q` 取消后续处理。
+`h` 将当前终端切换到主目录后重试。`--scan` 不会推出硬盘，结束进程后也只重新扫描。
+磁盘识别使用 macOS 自带工具，无需另装依赖。
+
 ## Zsh 补全和交互工具
 
 保留 Oh My Zsh、Powerlevel10k、`zsh-autosuggestions`、`zsh-syntax-highlighting` 和 zoxide。
